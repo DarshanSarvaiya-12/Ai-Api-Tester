@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#0a0a0a">
+<title>Ai Api Tester</title>
+<style>
+  :root {
+    --blue: #1d5cff;
+    --blue-dark: #1445c7;
+    --blue-soft: #eaf0ff;
+    --black: #0a0a0a;
+    --ink: #151515;
+    --muted: #5f6673;
+    --line: #dfe3ea;
+    --white: #ffffff;
+    --bg: #f6f8fc;
+    --red: #d92d20;
+    --green: #12805c;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+  header {
+    background: var(--black);
+    color: var(--white);
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex: none;
+  }
+  header h1 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 20px;
+    letter-spacing: 0.2px;
+    margin: 0;
+  }
+  .status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: #c9d3ea;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #6b7280; flex: none; }
+  .dot.on { background: #3ddc97; }
+  .dot.bad { background: var(--red); }
+
+  details.settings {
+    background: var(--white);
+    border-bottom: 1px solid var(--line);
+    flex: none;
+  }
+  details.settings > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px 16px;
+    font-weight: 600;
+    font-size: 15px;
+    display: flex; justify-content: space-between; align-items: center;
+    min-height: 48px;
+  }
+  details.settings > summary::-webkit-details-marker { display: none; }
+  details.settings > summary::after {
+    content: ""; width: 8px; height: 8px;
+    border-right: 2px solid var(--blue); border-bottom: 2px solid var(--blue);
+    transform: rotate(45deg); transition: transform .15s;
+  }
+  details.settings[open] > summary::after { transform: rotate(-135deg); }
+  .settings-body { padding: 0 16px 16px; display: grid; gap: 12px; max-height: 60dvh; overflow-y: auto; }
+  label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink); }
+  input, textarea {
+    font: inherit;
+    font-size: 16px; /* stops iOS zoom */
+    width: 100%;
+    padding: 12px;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    background: var(--white);
+    color: var(--ink);
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(29,92,255,.18); }
+  .keyrow { display: flex; gap: 8px; }
+  .keyrow input { flex: 1; min-width: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 15px; font-weight: 600;
+    min-height: 44px; padding: 0 16px;
+    border-radius: 10px; border: 1.5px solid var(--blue);
+    background: var(--blue); color: var(--white);
+    cursor: pointer; touch-action: manipulation;
+  }
+  button:active { background: var(--blue-dark); }
+  button.ghost { background: var(--white); color: var(--blue); }
+  button.danger { background: var(--white); color: var(--red); border-color: var(--red); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:focus-visible { outline: 3px solid rgba(29,92,255,.4); outline-offset: 2px; }
+  .hint { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin: 0; }
+  #testResult { font-size: 13.5px; line-height: 1.45; margin: 0; min-height: 0; }
+  #testResult.ok { color: var(--green); }
+  #testResult.err { color: var(--red); }
+
+  main {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  .empty {
+    margin: auto; text-align: center; max-width: 320px; color: var(--muted);
+  }
+  .empty h2 { font-family: var(--serif); font-weight: 500; color: var(--ink); font-size: 22px; margin: 0 0 8px; }
+  .empty p { margin: 0; font-size: 14.5px; line-height: 1.5; }
+  .msg {
+    max-width: 88%;
+    padding: 11px 14px;
+    border-radius: 14px;
+    font-size: 16px; line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .msg.user { align-self: flex-end; background: var(--blue); color: var(--white); border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--white); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.err { align-self: flex-start; background: #fff1f0; border: 1px solid #f4b7b2; color: #8a1c12; font-size: 14.5px; }
+  .msg.typing::after { content: "▍"; color: var(--blue); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .msg.typing::after { animation: none; } }
+
+  footer {
+    flex: none;
+    background: var(--white);
+    border-top: 1px solid var(--line);
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    display: flex; gap: 8px; align-items: flex-end;
+  }
+  footer textarea { resize: none; max-height: 140px; min-height: 46px; flex: 1; min-width: 0; line-height: 1.4; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    background: var(--black); color: var(--white);
+    padding: 10px 16px; border-radius: 10px; font-size: 14px;
+    max-width: 90vw; z-index: 10;
+  }
+  .toast[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ai Api Tester</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">No key</span></div>
+</header>
+
+<details class="settings" id="settings" open>
+  <summary>Connection settings</summary>
+  <div class="settings-body">
+    <label>Base URL
+      <input id="baseUrl" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1">
+    </label>
+    <label>API key
+      <div class="keyrow">
+        <input id="apiKey" type="password" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="sk-...">
+        <button type="button" class="ghost" id="toggleKey" aria-label="Show or hide key">Show</button>
+      </div>
+    </label>
+    <label>Model name
+      <input id="model" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+    </label>
+    <div class="row">
+      <button type="button" id="testBtn">Test key</button>
+      <button type="button" class="danger" id="clearBtn">Clear key</button>
+      <button type="button" class="ghost" id="newChatBtn">New chat</button>
+    </div>
+    <p id="testResult" role="status"></p>
+    <p class="hint">Works with OpenAI-compatible APIs (OpenAI, OpenRouter, Groq, Together, Mistral and similar). Your key stays in this tab only and is cleared after 10 minutes of inactivity. It is sent only to the Base URL above.</p>
+  </div>
+</details>
+
+<main id="chat" aria-live="polite">
+  <div class="empty" id="empty">
+    <h2>Test any API key</h2>
+    <p>Add the Base URL, key and model above, press Test key, then start chatting.</p>
+  </div>
+</main>
+
+<footer>
+  <textarea id="input" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
+  <button type="button" id="sendBtn">Send</button>
+</footer>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Elements ----------
+  var $ = function (id) { return document.getElementById(id); };
+  var baseUrlEl = $("baseUrl"), apiKeyEl = $("apiKey"), modelEl = $("model");
+  var testBtn = $("testBtn"), clearBtn = $("clearBtn"), newChatBtn = $("newChatBtn");
+  var toggleKey = $("toggleKey"), testResult = $("testResult");
+  var chatEl = $("chat"), emptyEl = $("empty"), inputEl = $("input"), sendBtn = $("sendBtn");
+  var dot = $("dot"), statusText = $("statusText"), toastEl = $("toast"), settings = $("settings");
+
+  // ---------- Constants ----------
+  var IDLE_MS = 10 * 60 * 1000;      // 10 minutes
+  var FIRST_BYTE_MS = 60 * 1000;     // wait max 60s for first response
+  var MAX_HISTORY = 20;              // messages sent to the API
+  var MAX_DOM_MSGS = 100;            // messages kept on screen
+
+  // ---------- State ----------
+  var history = [];
+  var busy = false;
+  var controller = null;
+  var lastActivity = Date.now();
+  var idleTimer = null;
+
+  // ---------- Safe storage helpers ----------
+  function sGet(store, k) { try { return store.getItem(k) || ""; } catch (e) { return ""; } }
+  function sSet(store, k, v) { try { store.setItem(k, v); } catch (e) {} }
+  function sDel(store, k) { try { store.removeItem(k); } catch (e) {} }
+
+  // Key: sessionStorage only. Base URL and model are not secret.
+  baseUrlEl.value = sGet(localStorage, "aat_base") || "https://api.openai.com/v1";
+  modelEl.value = sGet(localStorage, "aat_model");
+  apiKeyEl.value = sGet(sessionStorage, "aat_key");
+
+  baseUrlEl.addEventListener("input", function () { sSet(localStorage, "aat_base", baseUrlEl.value.trim()); });
+  modelEl.addEventListener("input", function () { sSet(localStorage, "aat_model", modelEl.value.trim()); });
+  apiKeyEl.addEventListener("input", function () {
+    sSet(sessionStorage, "aat_key", apiKeyEl.value.trim());
+    updateStatus();
+  });
+
+  // ---------- UI helpers ----------
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { toastEl.hidden = true; }, 3500);
+  }
+
+  function updateStatus(state, label) {
+    var hasKey = apiKeyEl.value.trim().length > 0;
+    dot.className = "dot" + (state === "bad" ? " bad" : (hasKey ? " on" : ""));
+    statusText.textContent = label || (hasKey ? "Key set" : "No key");
+  }
+
+  function setResult(text, cls) {
+    testResult.textContent = text;
+    testResult.className = cls || "";
+  }
+
+  function nearBottom() {
+    return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 120;
+  }
+  function scrollBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
+
+  function addMsg(role, text) {
+    if (emptyEl && emptyEl.parentNode) emptyEl.parentNode.removeChild(emptyEl);
+    var d = document.createElement("div");
+    d.className = "msg " + role;
+    d.textContent = text; // textContent = plain text, blocks script injection
+    chatEl.appendChild(d);
+    while (chatEl.children.length > MAX_DOM_MSGS) chatEl.removeChild(chatEl.firstChild);
+    scrollBottom();
+    return d;
+  }
+
+  toggleKey.addEventListener("click", function () {
+    var show = apiKeyEl.type === "password";
+    apiKeyEl.type = show ? "text" : "password";
+    toggleKey.textContent = show ? "Hide" : "Show";
+  });
+
+  // ---------- Input checks ----------
+  function getConfig() {
+    var base = baseUrlEl.value.trim().replace(/\/+$/, "");
+    var key = apiKeyEl.value.trim();
+    var model = modelEl.value.trim();
+    if (!base) return { error: "Enter the Base URL." };
+    var u;
+    try { u = new URL(base); } catch (e) { return { error: "Base URL is not valid. Example: https://api.openai.com/v1" }; }
+    var local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+    if (u.protocol !== "https:" && !(local && u.protocol === "http:")) {
+      return { error: "Base URL must start with https:// so your key is not sent in plain text." };
+    }
+    if (u.username || u.password) return { error: "Do not put user names or keys inside the URL." };
+    if (!key) return { error: "Enter your API key." };
+    if (/[^\x21-\x7E]/.test(key)) return { error: "API key has spaces or hidden characters. Paste it again." };
+    return { base: base, key: key, model: model };
+  }
+
+  function explain(status, bodyText) {
+    var detail = "";
+    try {
+      var j = JSON.parse(bodyText);
+      detail = (j.error && (j.error.message || j.error)) || j.message || "";
+      if (typeof detail !== "string") detail = JSON.stringify(detail);
+    } catch (e) { detail = (bodyText || "").slice(0, 200); }
+    var map = {
+      400: "Bad request. Check the model name.",
+      401: "Invalid or expired API key.",
+      402: "Payment or credit problem on this account.",
+      403: "Key is not allowed to do this (permissions or region).",
+      404: "Not found. Check the Base URL and model name.",
+      408: "The provider timed out. Try again.",
+      413: "Message is too large.",
+      429: "Rate limit or no credit left.",
+      500: "Provider server error. Try again later.",
+      502: "Provider gateway error. Try again later.",
+      503: "Provider is busy. Try again later.",
+      504: "Provider timed out. Try again later."
+    };
+    var base = map[status] || ("Request failed (HTTP " + status + ").");
+    return detail ? base + " Provider says: " + String(detail).slice(0, 300) : base;
+  }
+
+  function networkMessage(e) {
+    if (e && e.name === "AbortError") return "Stopped.";
+    return "Could not reach the provider. Check the Base URL and your internet. If it keeps failing, this provider may block browser requests (CORS).";
+  }
+
+  // ---------- Test key ----------
+  testBtn.addEventListener("click", async function () {
+    var cfg = getConfig();
+    if (cfg.error) { setResult(cfg.error, "err"); updateStatus("bad", "Check settings"); return; }
+    testBtn.disabled = true;
+    setResult("Testing...", "");
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, 20000);
+    try {
+      var res = await fetch(cfg.base + "/models", {
+        method: "GET",
+        headers: { "Authorization": "Bearer " + cfg.key },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: ctl.signal
+      });
+      var text = await res.text();
+      if (res.ok) {
+        var count = "";
+        try { var j = JSON.parse(text); if (j.data && j.data.length) count = " " + j.data.length + " models found."; } catch (e) {}
+        setResult("Key works." + count, "ok");
+        updateStatus("ok", "Key valid");
+      } else if (res.status === 404 || res.status === 405) {
+        setResult("This provider has no model list, so the key is not confirmed. Send a message to test it.", "err");
+        updateStatus();
+      } else {
+        setResult(explain(res.status, text), "err");
+        updateStatus("bad", "Key failed");
+      }
+    } catch (e) {
+      setResult(e.name === "AbortError" ? "Timed out after 20 seconds." : networkMessage(e), "err");
+      updateStatus("bad", "Not reached");
+    } finally {
+      clearTimeout(t);
+      testBtn.disabled = false;
+    }
+  });
+
+  // ---------- Clear key ----------
+  clearBtn.addEventListener("click", function () {
+    if (controller) { try { controller.abort(); } catch (e) {} }
+    apiKeyEl.value = "";
+    apiKeyEl.type = "password";
+    toggleKey.textContent = "Show";
+    sDel(sessionStorage, "aat_key");
+    setResult("", "");
+    updateStatus();
+    toast("Key cleared");
+  });
+
+  // ---------- New chat ----------
+  newChatBtn.addEventListener("click", function () {
+    if (controller) { try { controller.abort(); } catch (e) {} }
+    history = [];
+    chatEl.textContent = "";
+    chatEl.appendChild(emptyEl);
+  });
+
+  // ---------- Send message (streaming) ----------
+  async function send() {
+    if (busy) return;
+    var text = inputEl.value.trim();
+    if (!text) return;
+    var cfg = getConfig();
+    if (cfg.error) { settings.open = true; setResult(cfg.error, "err"); updateStatus("bad", "Check settings"); return; }
+    if (!cfg.model) { settings.open = true; setResult("Enter the model name.", "err"); return; }
+
+    inputEl.value = "";
+    autoGrow();
+    addMsg("user", text);
+    history.push({ role: "user", content: text });
+
+    busy = true;
+    sendBtn.textContent = "Stop";
+    sendBtn.classList.add("danger");
+    sendBtn.classList.add("ghost");
+
+    var botEl = addMsg("bot typing", "");
+    var full = "";
+    var pending = false;
+    controller = new AbortController();
+    var ctl = controller;
+    var firstByteTimer = setTimeout(function () { ctl.abort(); botEl.dataset.timeout = "1"; }, FIRST_BYTE_MS);
+
+    function paint() {
+      pending = false;
+      var stick = nearBottom();
+      botEl.textContent = full;
+      if (stick) scrollBottom();
+    }
+    function schedulePaint() {
+      if (!pending) { pending = true; requestAnimationFrame(paint); }
+    }
+
+    try {
+      var res = await fetch(cfg.base + "/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + cfg.key,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: history.slice(-MAX_HISTORY),
+          stream: true
+        }),
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: ctl.signal
+      });
+      clearTimeout(firstByteTimer);
+
+      if (!res.ok) {
+        var errText = await res.text();
+        throw { http: true, status: res.status, body: errText };
+      }
+
+      var ctype = res.headers.get("content-type") || "";
+      if (ctype.indexOf("text/event-stream") === -1 || !res.body) {
+        // Provider ignored streaming: read the full reply
+        var data = await res.json();
+        var m = data.choices && data.choices[0] && data.choices[0].message;
+        full = (m && m.content) || "";
+      } else {
+        var reader = res.body.getReader();
+        var decoder = new TextDecoder();
+        var buf = "";
+        var done = false;
+        while (!done) {
+          var r = await reader.read();
+          if (r.done) break;
+          buf += decoder.decode(r.value, { stream: true });
+          var lines = buf.split("\n");
+          buf = lines.pop();
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (line.indexOf("data:") !== 0) continue;
+            var payload = line.slice(5).trim();
+            if (payload === "[DONE]") { done = true; break; }
+            try {
+              var j = JSON.parse(payload);
+              var delta = j.choices && j.choices[0] && j.choices[0].delta;
+              if (delta && typeof delta.content === "string") full += delta.content;
+              if (j.error) throw { http: true, status: j.error.code || 500, body: JSON.stringify(j) };
+            } catch (pe) {
+              if (pe && pe.http) throw pe; // real provider error
+              /* ignore partial or non-JSON lines */
+            }
+          }
+          schedulePaint();
+        }
+      }
+
+      botEl.classList.remove("typing");
+      botEl.textContent = full || "(empty reply)";
+      if (full) history.push({ role: "assistant", content: full });
+      else history.pop();
+      updateStatus("ok", "Key valid");
+    } catch (e) {
+      clearTimeout(firstByteTimer);
+      botEl.classList.remove("typing");
+      if (e && e.http) {
+        botEl.className = "msg err";
+        botEl.textContent = explain(Number(e.status) || 500, e.body);
+        history.pop();
+        if (e.status === 401 || e.status === 403) updateStatus("bad", "Key failed");
+      } else if (e && e.name === "AbortError") {
+        if (botEl.dataset.timeout) {
+          botEl.className = "msg err";
+          botEl.textContent = "No reply after 60 seconds. Check the Base URL and model, then try again.";
+          history.pop();
+        } else if (full) {
+          botEl.textContent = full + "\n\n[stopped]";
+          history.push({ role: "assistant", content: full });
+        } else {
+          botEl.className = "msg err";
+          botEl.textContent = "Stopped.";
+          history.pop();
+        }
+      } else {
+        botEl.className = "msg err";
+        botEl.textContent = networkMessage(e);
+        history.pop();
+        updateStatus("bad", "Not reached");
+      }
+    } finally {
+      busy = false;
+      controller = null;
+      sendBtn.textContent = "Send";
+      sendBtn.classList.remove("danger");
+      sendBtn.classList.remove("ghost");
+      scrollBottom();
+    }
+  }
+
+  sendBtn.addEventListener("click", function () {
+    if (busy && controller) { controller.abort(); return; }
+    send();
+  });
+
+  inputEl.addEventListener("keydown", function (e) {
+    // Enter sends on desktop; on phones Enter makes a new line
+    if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(hover: hover)").matches) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  function autoGrow() {
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+  }
+  inputEl.addEventListener("input", autoGrow);
+
+  // ---------- Auto clear key after 10 minutes of inactivity ----------
+  function markActive() {
+    lastActivity = Date.now();
+    scheduleIdle();
+  }
+  function scheduleIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(idleCheck, IDLE_MS);
+  }
+  function idleCheck() {
+    var idleFor = Date.now() - lastActivity;
+    if (idleFor < IDLE_MS) { scheduleIdle(); return; }
+    if (busy) { lastActivity = Date.now(); scheduleIdle(); return; } // reply still streaming
+    if (apiKeyEl.value.trim()) {
+      clearBtn.click(); // auto click Clear key
+      toast("Key cleared after 10 minutes of inactivity");
+    }
+    scheduleIdle();
+  }
+  ["pointerdown", "keydown", "touchstart", "input", "scroll"].forEach(function (ev) {
+    document.addEventListener(ev, markActive, { passive: true, capture: true });
+  });
+  // Phones pause timers in background tabs, so check again when the tab returns
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) idleCheck();
+  });
+  scheduleIdle();
+
+  updateStatus();
+})();
+</script>
+</body>
+</html>
