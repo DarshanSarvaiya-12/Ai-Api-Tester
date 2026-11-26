@@ -163,18 +163,29 @@
     background: var(--white);
     border-top: 1px solid var(--line);
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-    display: flex; gap: 8px; align-items: flex-end;
+    display: flex; flex-direction: column; gap: 8px;
   }
   footer textarea { resize: none; max-height: 140px; min-height: 46px; flex: 1; min-width: 0; line-height: 1.4; }
 
   .toast {
-    position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+    position: fixed; left: 50%; bottom: calc(140px + env(safe-area-inset-bottom, 0px));
     transform: translateX(-50%);
     background: var(--black); color: var(--white);
     padding: 10px 16px; border-radius: 10px; font-size: 14px;
     max-width: 90vw; z-index: 10;
   }
   .toast[hidden] { display: none; }
+  .compose { display: flex; gap: 8px; align-items: flex-end; }
+  .bar { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  select {
+    font: inherit; font-size: 15px; font-weight: 600;
+    min-height: 40px; padding: 0 10px;
+    border: 1.5px solid var(--line); border-radius: 10px;
+    background: var(--white); color: var(--ink);
+  }
+  select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(29,92,255,.18); }
+  .bar select { color: var(--blue); border-color: var(--blue); }
+  label select { width: 100%; }
   [hidden] { display: none !important; }
   .chips { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 8px; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
   .chip { min-height: 38px; padding: 0 12px; font-size: 14px; font-weight: 500; background: var(--white); color: var(--blue); border: 1.5px solid var(--line); border-radius: 999px; white-space: nowrap; flex: none; }
@@ -209,6 +220,16 @@
     <label>System prompt (optional)
       <textarea id="sysPrompt" class="sys" rows="3" maxlength="8000" autocapitalize="sentences" spellcheck="true" placeholder="Example: You are a helpful assistant. Answer in simple English."></textarea>
     </label>
+    <label>Thinking format
+      <select id="thinkFmt">
+        <option value="auto">Auto (from Base URL)</option>
+        <option value="openai">OpenAI style (reasoning_effort)</option>
+        <option value="sarvam">Sarvam style</option>
+        <option value="openrouter">OpenRouter style</option>
+        <option value="vllm">vLLM style (chat_template_kwargs)</option>
+      </select>
+    </label>
+    <p class="hint">The Thinking menu is next to the message box. Default sends nothing, so the provider decides. Each provider has its own way to control thinking. If one shows an error, set Thinking to Default or try another format.</p>
     <label class="check"><input id="useProxy" type="checkbox"> <span>Use proxy (for providers that block browsers, like JarvisLabs)</span></label>
     <label id="proxyWrap" hidden>Proxy URL
       <input id="proxyUrl" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://your-proxy.onrender.com">
@@ -231,8 +252,21 @@
 </main>
 
 <footer>
-  <textarea id="input" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
-  <button type="button" id="sendBtn">Send</button>
+  <div class="bar">
+    <label for="thinking">Thinking</label>
+    <select id="thinking" aria-label="Thinking level">
+      <option value="default">Default</option>
+      <option value="off">Off</option>
+      <option value="on">On</option>
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+  </div>
+  <div class="compose">
+    <textarea id="input" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
+    <button type="button" id="sendBtn">Send</button>
+  </div>
 </footer>
 
 <div class="toast" id="toast" hidden></div>
@@ -246,6 +280,7 @@
   var baseUrlEl = $("baseUrl"), apiKeyEl = $("apiKey"), modelEl = $("model");
   var useProxyEl = $("useProxy"), proxyUrlEl = $("proxyUrl"), proxyWrap = $("proxyWrap");
   var sysPromptEl = $("sysPrompt");
+  var thinkingEl = $("thinking"), thinkFmtEl = $("thinkFmt");
   var testBtn = $("testBtn"), clearBtn = $("clearBtn"), newChatBtn = $("newChatBtn");
   var toggleKey = $("toggleKey"), testResult = $("testResult");
   var chatEl = $("chat"), emptyEl = $("empty"), inputEl = $("input"), sendBtn = $("sendBtn");
@@ -290,6 +325,13 @@
 
   sysPromptEl.value = sGet(localStorage, "aat_sys");
   sysPromptEl.addEventListener("input", function () { sSet(localStorage, "aat_sys", sysPromptEl.value); });
+
+  thinkingEl.value = sGet(localStorage, "aat_think") || "default";
+  if (!thinkingEl.value) thinkingEl.value = "default";
+  thinkFmtEl.value = sGet(localStorage, "aat_thinkfmt") || "auto";
+  if (!thinkFmtEl.value) thinkFmtEl.value = "auto";
+  thinkingEl.addEventListener("change", function () { sSet(localStorage, "aat_think", thinkingEl.value); });
+  thinkFmtEl.addEventListener("change", function () { sSet(localStorage, "aat_thinkfmt", thinkFmtEl.value); });
   apiKeyEl.addEventListener("input", function () {
     sSet(sessionStorage, "aat_key", apiKeyEl.value.trim());
     updateStatus();
@@ -374,7 +416,7 @@
       if (typeof detail !== "string") detail = JSON.stringify(detail);
     } catch (e) { detail = (bodyText || "").slice(0, 200); }
     var map = {
-      400: "Bad request. Check the model name.",
+      400: "Bad request. Check the model name. If you changed Thinking, set it to Default and try again.",
       401: "Invalid or expired API key.",
       402: "Payment or credit problem on this account.",
       403: "Key is not allowed to do this (permissions or region).",
@@ -608,6 +650,36 @@
     if (text.length > 200000) el.textContent = text; else renderMarkdown(el, text);
   }
 
+  // ---------- Thinking level ----------
+  function detectFormat(base) {
+    var h = "";
+    try { h = new URL(base).hostname.toLowerCase(); } catch (e) { return "openai"; }
+    if (h === "api.sarvam.ai") return "sarvam";
+    if (h === "openrouter.ai" || h.slice(-14) === ".openrouter.ai") return "openrouter";
+    return "openai";
+  }
+
+  // Returns extra fields for the request body. "default" sends nothing.
+  function thinkingParams(level, fmt) {
+    if (level === "default") return {};
+    var effort = (level === "low" || level === "medium" || level === "high") ? level : (level === "on" ? "medium" : null);
+    if (fmt === "sarvam") {
+      return { reasoning_effort: level === "off" ? null : effort };
+    }
+    if (fmt === "openrouter") {
+      if (level === "off") return { reasoning: { enabled: false } };
+      if (level === "on") return { reasoning: { enabled: true } };
+      return { reasoning: { effort: effort } };
+    }
+    if (fmt === "vllm") {
+      if (level === "off") return { chat_template_kwargs: { enable_thinking: false } };
+      if (level === "on") return { chat_template_kwargs: { enable_thinking: true } };
+      return { reasoning_effort: effort, chat_template_kwargs: { enable_thinking: true } };
+    }
+    // OpenAI style (also Groq, Together and most others)
+    return { reasoning_effort: level === "off" ? "none" : effort };
+  }
+
   function buildMessages() {
     var sys = sysPromptEl.value.trim();
     var msgs = history.slice(-MAX_HISTORY);
@@ -637,6 +709,7 @@
     var full = "";
     var pending = false;
     var finished = false;
+    var gotThinking = false;
     var lastPaint = 0;
     controller = new AbortController();
     var ctl = controller;
@@ -647,7 +720,9 @@
       if (finished) return;
       lastPaint = Date.now();
       var stick = nearBottom();
-      if (full.length > 30000) botEl.textContent = full; else renderMarkdown(botEl, full);
+      if (!full) botEl.textContent = gotThinking ? "Thinking…" : "";
+      else if (full.length > 30000) botEl.textContent = full;
+      else renderMarkdown(botEl, full);
       if (stick) scrollBottom();
     }
     function schedulePaint() {
@@ -658,11 +733,10 @@
     }
 
     try {
-      var res = await makeRequest(cfg, "/chat/completions", "POST", JSON.stringify({
-        model: cfg.model,
-        messages: buildMessages(),
-        stream: true
-      }), ctl.signal);
+      var reqBody = { model: cfg.model, messages: buildMessages(), stream: true };
+      var fmt = thinkFmtEl.value === "auto" ? detectFormat(cfg.base) : thinkFmtEl.value;
+      Object.assign(reqBody, thinkingParams(thinkingEl.value, fmt));
+      var res = await makeRequest(cfg, "/chat/completions", "POST", JSON.stringify(reqBody), ctl.signal);
       clearTimeout(firstByteTimer);
 
       if (!res.ok) {
@@ -695,6 +769,7 @@
             try {
               var j = JSON.parse(payload);
               var delta = j.choices && j.choices[0] && j.choices[0].delta;
+              if (delta && (delta.reasoning_content || delta.reasoning)) gotThinking = true;
               if (delta && typeof delta.content === "string") full += delta.content;
               if (j.error) throw { http: true, status: j.error.code || 500, body: JSON.stringify(j) };
             } catch (pe) {
