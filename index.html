@@ -176,7 +176,25 @@
   }
   .toast[hidden] { display: none; }
   .compose { display: flex; gap: 8px; align-items: flex-end; }
-  .bar { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .tok { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--ink); text-align: right; line-height: 1.3; font-variant-numeric: tabular-nums; }
+  header .right { display: flex; align-items: center; gap: 10px; }
+  .metrics-btn { min-height: 36px; padding: 0 12px; font-size: 14px; }
+  @media (max-width: 400px) { #statusText { display: none; } }
+  .sheet { position: fixed; inset: 0; background: rgba(10,10,10,.55); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+  .sheet-card { background: var(--white); width: 100%; max-width: 560px; max-height: 88dvh; overflow-y: auto; border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .sheet-head h2 { font-family: var(--serif); font-weight: 500; font-size: 21px; margin: 0; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .stat { background: var(--blue-soft); border-radius: 12px; padding: 10px 12px; }
+  .stat b { display: block; font-family: var(--serif); font-size: 21px; font-weight: 600; overflow-wrap: anywhere; }
+  .stat span { font-size: 12.5px; color: var(--muted); }
+  .stat.total { grid-column: 1 / -1; background: var(--black); color: var(--white); }
+  .stat.total span { color: #c9d3ea; }
+  table.mt { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; margin-bottom: 12px; }
+  table.mt th, table.mt td { padding: 7px 6px; text-align: right; border-bottom: 1px solid var(--line); }
+  table.mt th:first-child, table.mt td:first-child { text-align: left; }
+  table.mt th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
   select {
     font: inherit; font-size: 15px; font-weight: 600;
     min-height: 40px; padding: 0 10px;
@@ -198,7 +216,10 @@
 
 <header>
   <h1>Ai Api Tester</h1>
-  <div class="status"><span class="dot" id="dot"></span><span id="statusText">No key</span></div>
+  <div class="right">
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">No key</span></div>
+    <button type="button" class="metrics-btn" id="metricsBtn">Metrics</button>
+  </div>
 </header>
 
 <details class="settings" id="settings" open>
@@ -262,12 +283,23 @@
       <option value="medium">Medium</option>
       <option value="high">High</option>
     </select>
+    <span class="tok" id="tokLive">In – · Out – · Cache –</span>
   </div>
   <div class="compose">
     <textarea id="input" rows="1" placeholder="Type a message" autocomplete="off"></textarea>
     <button type="button" id="sendBtn">Send</button>
   </div>
 </footer>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">Conversation metrics</h2>
+      <button type="button" class="ghost" id="sheetClose">Close</button>
+    </div>
+    <div id="sheetBody"></div>
+  </div>
+</div>
 
 <div class="toast" id="toast" hidden></div>
 
@@ -281,6 +313,7 @@
   var useProxyEl = $("useProxy"), proxyUrlEl = $("proxyUrl"), proxyWrap = $("proxyWrap");
   var sysPromptEl = $("sysPrompt");
   var thinkingEl = $("thinking"), thinkFmtEl = $("thinkFmt");
+  var tokLiveEl = $("tokLive"), metricsBtn = $("metricsBtn"), sheetEl = $("sheet"), sheetBody = $("sheetBody"), sheetClose = $("sheetClose");
   var testBtn = $("testBtn"), clearBtn = $("clearBtn"), newChatBtn = $("newChatBtn");
   var toggleKey = $("toggleKey"), testResult = $("testResult");
   var chatEl = $("chat"), emptyEl = $("empty"), inputEl = $("input"), sendBtn = $("sendBtn");
@@ -295,6 +328,8 @@
 
   // ---------- State ----------
   var history = [];
+  var metrics = [];            // one entry per finished reply
+  var sendUsageOpt = true;     // ask provider for exact token counts
   var busy = false;
   var controller = null;
   var lastActivity = Date.now();
@@ -540,6 +575,8 @@
   newChatBtn.addEventListener("click", function () {
     if (controller) { try { controller.abort(); } catch (e) {} }
     history = [];
+    metrics = [];
+    setLive(null, null, null, false);
     chatEl.textContent = "";
     chatEl.appendChild(emptyEl);
   });
@@ -650,6 +687,113 @@
     if (text.length > 200000) el.textContent = text; else renderMarkdown(el, text);
   }
 
+  // ---------- Token counts ----------
+  function num(v) { return typeof v === "number" && isFinite(v) ? v : null; }
+
+  function estTokens(text) { return Math.ceil((text || "").length / 4); }
+
+  function estimateMessages(msgs) {
+    var n = 0;
+    msgs.forEach(function (m) { n += estTokens(m.content) + 4; });
+    return n;
+  }
+
+  function fmtTok(n, full) {
+    if (n === null || n === undefined) return "–";
+    if (!full && n >= 10000) return (n / 1000).toFixed(1) + "k";
+    return n.toLocaleString("en-US");
+  }
+
+  // Reads the usage object that providers send back (several naming styles)
+  function readUsage(u) {
+    if (!u || typeof u !== "object") return null;
+    var pd = u.prompt_tokens_details || {}, cd = u.completion_tokens_details || {};
+    var inT = num(u.prompt_tokens); if (inT === null) inT = num(u.input_tokens);
+    var outT = num(u.completion_tokens); if (outT === null) outT = num(u.output_tokens);
+    if (inT === null && outT === null) return null;
+    var cache = num(pd.cached_tokens);
+    if (cache === null) cache = num(u.prompt_cache_hit_tokens);
+    if (cache === null) cache = num(u.cached_tokens);
+    if (cache === null) cache = num(u.cache_read_input_tokens);
+    return { inT: inT || 0, outT: outT || 0, cache: cache, reason: num(cd.reasoning_tokens) };
+  }
+
+  function setLive(inT, outT, cache, est) {
+    var t = est ? "~" : "";
+    tokLiveEl.textContent = "In " + (inT === null ? "–" : t + fmtTok(inT)) +
+      " · Out " + (outT === null ? "–" : t + fmtTok(outT)) +
+      " · Cache " + fmtTok(cache);
+  }
+
+  function recordTokens(usage, estIn, full) {
+    var m = usage
+      ? { inT: usage.inT, outT: usage.outT, cache: usage.cache, reason: usage.reason, est: false }
+      : { inT: estIn, outT: estTokens(full), cache: null, reason: null, est: true };
+    metrics.push(m);
+    setLive(m.inT, m.outT, m.cache, m.est);
+  }
+
+  function mk(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function stat(label, value, cls) {
+    var d = mk("div", "stat" + (cls ? " " + cls : ""));
+    d.appendChild(mk("b", "", value));
+    d.appendChild(mk("span", "", label));
+    return d;
+  }
+
+  function openMetrics() {
+    sheetBody.textContent = "";
+    var ti = 0, to = 0, tc = 0, tr = 0, anyC = false, anyR = false, anyE = false;
+    metrics.forEach(function (m) {
+      ti += m.inT; to += m.outT;
+      if (m.cache !== null) { tc += m.cache; anyC = true; }
+      if (m.reason !== null) { tr += m.reason; anyR = true; }
+      if (m.est) anyE = true;
+    });
+    var pre = anyE ? "~" : "";
+
+    var grid = mk("div", "stat-grid");
+    grid.appendChild(stat("Replies", String(metrics.length)));
+    grid.appendChild(stat("Input tokens", pre + fmtTok(ti, true)));
+    grid.appendChild(stat("Output tokens", pre + fmtTok(to, true)));
+    grid.appendChild(stat("Cache tokens", anyC ? fmtTok(tc, true) : "Not reported"));
+    if (anyR) grid.appendChild(stat("Thinking tokens (inside Output)", fmtTok(tr, true)));
+    grid.appendChild(stat("Total (Input + Output)", pre + fmtTok(ti + to, true), "total"));
+    sheetBody.appendChild(grid);
+
+    if (!metrics.length) {
+      sheetBody.appendChild(mk("p", "hint", "No replies yet. Send a message and the numbers will appear here."));
+    } else {
+      var table = mk("table", "mt");
+      var head = mk("tr");
+      ["Reply", "Input", "Output", "Cache"].forEach(function (h) { head.appendChild(mk("th", "", h)); });
+      table.appendChild(head);
+      metrics.forEach(function (m, idx) {
+        var tr_ = mk("tr"), t = m.est ? "~" : "";
+        tr_.appendChild(mk("td", "", "#" + (idx + 1)));
+        tr_.appendChild(mk("td", "", t + fmtTok(m.inT, true)));
+        tr_.appendChild(mk("td", "", t + fmtTok(m.outT, true)));
+        tr_.appendChild(mk("td", "", fmtTok(m.cache, true)));
+        table.appendChild(tr_);
+      });
+      sheetBody.appendChild(table);
+    }
+
+    sheetBody.appendChild(mk("p", "hint", "Input grows with every reply because the whole chat is sent again each time. Cache is part of Input, and Thinking is part of Output. A number with ~ is an estimate, used when the provider does not send exact counts. Cache shows a dash when the provider does not report it. New chat resets these numbers."));
+    sheetEl.hidden = false;
+    sheetClose.focus();
+  }
+  function closeMetrics() { sheetEl.hidden = true; }
+  metricsBtn.addEventListener("click", openMetrics);
+  sheetClose.addEventListener("click", closeMetrics);
+  sheetEl.addEventListener("click", function (e) { if (e.target === sheetEl) closeMetrics(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !sheetEl.hidden) closeMetrics(); });
+
   // ---------- Thinking level ----------
   function detectFormat(base) {
     var h = "";
@@ -699,6 +843,10 @@
     autoGrow();
     addMsg("user", text);
     history.push({ role: "user", content: text });
+    var sentMsgs = buildMessages();
+    var estIn = estimateMessages(sentMsgs);
+    var usage = null;
+    setLive(estIn, 0, null, true);
 
     busy = true;
     sendBtn.textContent = "Stop";
@@ -720,6 +868,7 @@
       if (finished) return;
       lastPaint = Date.now();
       var stick = nearBottom();
+      if (!usage) setLive(estIn, estTokens(full), null, true);
       if (!full) botEl.textContent = gotThinking ? "Thinking…" : "";
       else if (full.length > 30000) botEl.textContent = full;
       else renderMarkdown(botEl, full);
@@ -733,14 +882,28 @@
     }
 
     try {
-      var reqBody = { model: cfg.model, messages: buildMessages(), stream: true };
       var fmt = thinkFmtEl.value === "auto" ? detectFormat(cfg.base) : thinkFmtEl.value;
-      Object.assign(reqBody, thinkingParams(thinkingEl.value, fmt));
-      var res = await makeRequest(cfg, "/chat/completions", "POST", JSON.stringify(reqBody), ctl.signal);
+      var extra = thinkingParams(thinkingEl.value, fmt);
+      var bodyFor = function (withUsage) {
+        var b = { model: cfg.model, messages: sentMsgs, stream: true };
+        if (withUsage) b.stream_options = { include_usage: true };
+        return JSON.stringify(Object.assign(b, extra));
+      };
+      var res = await makeRequest(cfg, "/chat/completions", "POST", bodyFor(sendUsageOpt), ctl.signal);
+      var preErr = null;
+      if (!res.ok && sendUsageOpt && (res.status === 400 || res.status === 422)) {
+        preErr = await res.text();
+        if (/stream_options|include_usage/i.test(preErr)) {
+          // provider does not support exact usage in streams: retry without it
+          sendUsageOpt = false;
+          preErr = null;
+          res = await makeRequest(cfg, "/chat/completions", "POST", bodyFor(false), ctl.signal);
+        }
+      }
       clearTimeout(firstByteTimer);
 
       if (!res.ok) {
-        var errText = await res.text();
+        var errText = preErr !== null ? preErr : await res.text();
         throw { http: true, status: res.status, body: errText };
       }
 
@@ -748,6 +911,7 @@
       if (ctype.indexOf("text/event-stream") === -1 || !res.body) {
         // Provider ignored streaming: read the full reply
         var data = await res.json();
+        if (data && data.usage) usage = readUsage(data.usage) || usage;
         var m = data.choices && data.choices[0] && data.choices[0].message;
         full = (m && m.content) || "";
       } else {
@@ -768,6 +932,7 @@
             if (payload === "[DONE]") { done = true; break; }
             try {
               var j = JSON.parse(payload);
+              if (j.usage) usage = readUsage(j.usage) || usage;
               var delta = j.choices && j.choices[0] && j.choices[0].delta;
               if (delta && (delta.reasoning_content || delta.reasoning)) gotThinking = true;
               if (delta && typeof delta.content === "string") full += delta.content;
@@ -783,7 +948,7 @@
 
       botEl.classList.remove("typing");
       finalRender(botEl, full || "(empty reply)");
-      if (full) history.push({ role: "assistant", content: full });
+      if (full) { history.push({ role: "assistant", content: full }); recordTokens(usage, estIn, full); }
       else history.pop();
       updateStatus("ok", "Key valid");
     } catch (e) {
@@ -802,6 +967,7 @@
         } else if (full) {
           finalRender(botEl, full + "\n\n[stopped]");
           history.push({ role: "assistant", content: full });
+          recordTokens(usage, estIn, full);
         } else {
           botEl.className = "msg err";
           botEl.textContent = "Stopped.";
