@@ -139,6 +139,21 @@
   .msg.user { align-self: flex-end; background: var(--blue); color: var(--white); border-bottom-right-radius: 4px; }
   .msg.bot { align-self: flex-start; background: var(--white); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
   .msg.err { align-self: flex-start; background: #fff1f0; border: 1px solid #f4b7b2; color: #8a1c12; font-size: 14.5px; }
+  .msg.bot { white-space: normal; }
+  .msg.bot > *:first-child { margin-top: 0; }
+  .msg.bot > *:last-child { margin-bottom: 0; }
+  .msg.bot p { margin: 0 0 10px; white-space: pre-wrap; }
+  .msg.bot ul, .msg.bot ol { margin: 0 0 10px; padding-left: 22px; }
+  .msg.bot li { margin: 3px 0; }
+  .msg.bot h3, .msg.bot h4, .msg.bot h5 { font-family: var(--serif); font-weight: 600; line-height: 1.3; margin: 14px 0 6px; }
+  .msg.bot h3 { font-size: 19px; } .msg.bot h4 { font-size: 17px; } .msg.bot h5 { font-size: 16px; }
+  .msg.bot blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid var(--blue); color: var(--muted); }
+  .msg.bot hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  .msg.bot a { color: var(--blue); text-decoration: underline; }
+  .msg.bot code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--blue-soft); padding: 1px 5px; border-radius: 5px; font-size: 0.92em; }
+  .msg.bot pre { background: var(--black); color: #f2f5ff; padding: 12px; border-radius: 10px; overflow-x: auto; margin: 0 0 10px; white-space: pre; font-size: 13.5px; line-height: 1.45; }
+  .msg.bot pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  textarea.sys { resize: vertical; min-height: 76px; }
   .msg.typing::after { content: "▍"; color: var(--blue); animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .msg.typing::after { animation: none; } }
@@ -161,8 +176,8 @@
   }
   .toast[hidden] { display: none; }
   [hidden] { display: none !important; }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; max-height: 150px; overflow-y: auto; padding: 2px; }
-  .chip { min-height: 38px; padding: 0 12px; font-size: 14px; font-weight: 500; background: var(--white); color: var(--blue); border: 1.5px solid var(--line); border-radius: 999px; overflow-wrap: anywhere; text-align: left; }
+  .chips { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 8px; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .chip { min-height: 38px; padding: 0 12px; font-size: 14px; font-weight: 500; background: var(--white); color: var(--blue); border: 1.5px solid var(--line); border-radius: 999px; white-space: nowrap; flex: none; }
   .chip.sel { background: var(--blue); color: var(--white); border-color: var(--blue); }
   label.check { display: flex; align-items: center; gap: 10px; font-weight: 500; line-height: 1.35; }
   label.check input { width: 22px; height: 22px; padding: 0; flex: none; accent-color: var(--blue); }
@@ -191,6 +206,9 @@
       <input id="model" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
     </label>
     <div id="modelList" class="chips" hidden aria-label="Available models"></div>
+    <label>System prompt (optional)
+      <textarea id="sysPrompt" class="sys" rows="3" maxlength="8000" autocapitalize="sentences" spellcheck="true" placeholder="Example: You are a helpful assistant. Answer in simple English."></textarea>
+    </label>
     <label class="check"><input id="useProxy" type="checkbox"> <span>Use proxy (for providers that block browsers, like JarvisLabs)</span></label>
     <label id="proxyWrap" hidden>Proxy URL
       <input id="proxyUrl" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://your-proxy.onrender.com">
@@ -227,6 +245,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var baseUrlEl = $("baseUrl"), apiKeyEl = $("apiKey"), modelEl = $("model");
   var useProxyEl = $("useProxy"), proxyUrlEl = $("proxyUrl"), proxyWrap = $("proxyWrap");
+  var sysPromptEl = $("sysPrompt");
   var testBtn = $("testBtn"), clearBtn = $("clearBtn"), newChatBtn = $("newChatBtn");
   var toggleKey = $("toggleKey"), testResult = $("testResult");
   var chatEl = $("chat"), emptyEl = $("empty"), inputEl = $("input"), sendBtn = $("sendBtn");
@@ -268,6 +287,9 @@
     syncProxyUi();
   });
   proxyUrlEl.addEventListener("input", function () { sSet(localStorage, "aat_proxy", proxyUrlEl.value.trim()); });
+
+  sysPromptEl.value = sGet(localStorage, "aat_sys");
+  sysPromptEl.addEventListener("input", function () { sSet(localStorage, "aat_sys", sysPromptEl.value); });
   apiKeyEl.addEventListener("input", function () {
     sSet(sessionStorage, "aat_key", apiKeyEl.value.trim());
     updateStatus();
@@ -480,6 +502,118 @@
     chatEl.appendChild(emptyEl);
   });
 
+  // ---------- Safe Markdown (builds elements, never uses innerHTML) ----------
+  var INLINE_RE = /`([^`\n]+)`|\*\*([\s\S]+?)\*\*|\*([^\s*][^*\n]*?)\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/;
+
+  function inline(parent, text) {
+    while (text) {
+      var m = INLINE_RE.exec(text);
+      if (!m) { parent.appendChild(document.createTextNode(text)); break; }
+      if (m.index > 0) parent.appendChild(document.createTextNode(text.slice(0, m.index)));
+      var el;
+      if (m[1] !== undefined) { el = document.createElement("code"); el.textContent = m[1]; }
+      else if (m[2] !== undefined) { el = document.createElement("strong"); inline(el, m[2]); }
+      else if (m[3] !== undefined) { el = document.createElement("em"); inline(el, m[3]); }
+      else {
+        el = document.createElement("a");
+        el.href = m[5];
+        el.target = "_blank";
+        el.rel = "noopener noreferrer nofollow";
+        inline(el, m[4]);
+      }
+      parent.appendChild(el);
+      text = text.slice(m.index + m[0].length);
+    }
+  }
+
+  function renderMarkdown(target, src) {
+    var frag = document.createDocumentFragment();
+    var lines = src.replace(/\r\n?/g, "\n").split("\n");
+    var i = 0, para = [];
+    var UL = /^\s*[-*+]\s+(.*)$/, OL = /^\s*\d+[.)]\s+(.*)$/;
+
+    function flushPara() {
+      if (!para.length) return;
+      var p = document.createElement("p");
+      inline(p, para.join("\n"));
+      frag.appendChild(p);
+      para = [];
+    }
+
+    while (i < lines.length) {
+      var line = lines[i], m;
+
+      if (/^\s*```/.test(line)) {                       // code block
+        flushPara();
+        var code = [];
+        i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { code.push(lines[i]); i++; }
+        i++;                                            // skip closing fence (may be missing while streaming)
+        var pre = document.createElement("pre"), c = document.createElement("code");
+        c.textContent = code.join("\n");
+        pre.appendChild(c);
+        frag.appendChild(pre);
+        continue;
+      }
+      if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {      // heading
+        flushPara();
+        var h = document.createElement("h" + (Math.min(m[1].length, 3) + 2));
+        inline(h, m[2]);
+        frag.appendChild(h);
+        i++; continue;
+      }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {    // horizontal line
+        flushPara();
+        frag.appendChild(document.createElement("hr"));
+        i++; continue;
+      }
+      var isUL = UL.test(line), isOL = !isUL && OL.test(line);
+      if (isUL || isOL) {                               // list
+        flushPara();
+        var re = isUL ? UL : OL;
+        var list = document.createElement(isUL ? "ul" : "ol");
+        while (i < lines.length) {
+          var lm = lines[i].match(re);
+          if (lm) {
+            var li = document.createElement("li");
+            inline(li, lm[1]);
+            list.appendChild(li);
+            i++;
+          } else if (lines[i].trim() === "" && i + 1 < lines.length && re.test(lines[i + 1])) {
+            i++;
+          } else break;
+        }
+        frag.appendChild(list);
+        continue;
+      }
+      if (/^>\s?/.test(line)) {                         // quote
+        flushPara();
+        var q = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, "")); i++; }
+        var bq = document.createElement("blockquote");
+        inline(bq, q.join("\n"));
+        frag.appendChild(bq);
+        continue;
+      }
+      if (line.trim() === "") { flushPara(); i++; continue; }
+      para.push(line);
+      i++;
+    }
+    flushPara();
+    target.textContent = "";
+    target.appendChild(frag);
+  }
+
+  function finalRender(el, text) {
+    if (text.length > 200000) el.textContent = text; else renderMarkdown(el, text);
+  }
+
+  function buildMessages() {
+    var sys = sysPromptEl.value.trim();
+    var msgs = history.slice(-MAX_HISTORY);
+    return sys ? [{ role: "system", content: sys }].concat(msgs) : msgs;
+  }
+
   // ---------- Send message (streaming) ----------
   async function send() {
     if (busy) return;
@@ -502,24 +636,31 @@
     var botEl = addMsg("bot typing", "");
     var full = "";
     var pending = false;
+    var finished = false;
+    var lastPaint = 0;
     controller = new AbortController();
     var ctl = controller;
     var firstByteTimer = setTimeout(function () { ctl.abort(); botEl.dataset.timeout = "1"; }, cfg.proxy ? PROXY_FIRST_BYTE_MS : FIRST_BYTE_MS);
 
     function paint() {
       pending = false;
+      if (finished) return;
+      lastPaint = Date.now();
       var stick = nearBottom();
-      botEl.textContent = full;
+      if (full.length > 30000) botEl.textContent = full; else renderMarkdown(botEl, full);
       if (stick) scrollBottom();
     }
     function schedulePaint() {
-      if (!pending) { pending = true; requestAnimationFrame(paint); }
+      if (!pending) {
+        pending = true;
+        setTimeout(function () { requestAnimationFrame(paint); }, Math.max(0, 80 - (Date.now() - lastPaint)));
+      }
     }
 
     try {
       var res = await makeRequest(cfg, "/chat/completions", "POST", JSON.stringify({
         model: cfg.model,
-        messages: history.slice(-MAX_HISTORY),
+        messages: buildMessages(),
         stream: true
       }), ctl.signal);
       clearTimeout(firstByteTimer);
@@ -566,7 +707,7 @@
       }
 
       botEl.classList.remove("typing");
-      botEl.textContent = full || "(empty reply)";
+      finalRender(botEl, full || "(empty reply)");
       if (full) history.push({ role: "assistant", content: full });
       else history.pop();
       updateStatus("ok", "Key valid");
@@ -584,7 +725,7 @@
           botEl.textContent = "No reply in time. Check the Base URL, model and proxy, then try again.";
           history.pop();
         } else if (full) {
-          botEl.textContent = full + "\n\n[stopped]";
+          finalRender(botEl, full + "\n\n[stopped]");
           history.push({ role: "assistant", content: full });
         } else {
           botEl.className = "msg err";
@@ -598,6 +739,7 @@
         updateStatus("bad", "Not reached");
       }
     } finally {
+      finished = true;
       busy = false;
       controller = null;
       sendBtn.textContent = "Send";
