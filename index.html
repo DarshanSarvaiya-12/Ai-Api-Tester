@@ -160,6 +160,9 @@
     max-width: 90vw; z-index: 10;
   }
   .toast[hidden] { display: none; }
+  [hidden] { display: none !important; }
+  label.check { display: flex; align-items: center; gap: 10px; font-weight: 500; line-height: 1.35; }
+  label.check input { width: 22px; height: 22px; padding: 0; flex: none; accent-color: var(--blue); }
 </style>
 </head>
 <body>
@@ -184,13 +187,17 @@
     <label>Model name
       <input id="model" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
     </label>
+    <label class="check"><input id="useProxy" type="checkbox"> <span>Use proxy (for providers that block browsers, like JarvisLabs)</span></label>
+    <label id="proxyWrap" hidden>Proxy URL
+      <input id="proxyUrl" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://your-proxy.onrender.com">
+    </label>
     <div class="row">
       <button type="button" id="testBtn">Test key</button>
       <button type="button" class="danger" id="clearBtn">Clear key</button>
       <button type="button" class="ghost" id="newChatBtn">New chat</button>
     </div>
     <p id="testResult" role="status"></p>
-    <p class="hint">Works with OpenAI-compatible APIs (OpenAI, OpenRouter, Groq, Together, Mistral and similar). Your key stays in this tab only and is cleared after 10 minutes of inactivity. It is sent only to the Base URL above.</p>
+    <p class="hint">Works with OpenAI-compatible APIs (OpenAI, OpenRouter, Groq, Together, Mistral and similar). Your key stays in this tab only and is cleared after 10 minutes of inactivity. It is sent only to the Base URL above, or through your own proxy when Use proxy is on.</p>
   </div>
 </details>
 
@@ -215,6 +222,7 @@
   // ---------- Elements ----------
   var $ = function (id) { return document.getElementById(id); };
   var baseUrlEl = $("baseUrl"), apiKeyEl = $("apiKey"), modelEl = $("model");
+  var useProxyEl = $("useProxy"), proxyUrlEl = $("proxyUrl"), proxyWrap = $("proxyWrap");
   var testBtn = $("testBtn"), clearBtn = $("clearBtn"), newChatBtn = $("newChatBtn");
   var toggleKey = $("toggleKey"), testResult = $("testResult");
   var chatEl = $("chat"), emptyEl = $("empty"), inputEl = $("input"), sendBtn = $("sendBtn");
@@ -223,6 +231,7 @@
   // ---------- Constants ----------
   var IDLE_MS = 10 * 60 * 1000;      // 10 minutes
   var FIRST_BYTE_MS = 60 * 1000;     // wait max 60s for first response
+  var PROXY_FIRST_BYTE_MS = 120 * 1000; // proxy may be waking up on Render free plan
   var MAX_HISTORY = 20;              // messages sent to the API
   var MAX_DOM_MSGS = 100;            // messages kept on screen
 
@@ -245,6 +254,16 @@
 
   baseUrlEl.addEventListener("input", function () { sSet(localStorage, "aat_base", baseUrlEl.value.trim()); });
   modelEl.addEventListener("input", function () { sSet(localStorage, "aat_model", modelEl.value.trim()); });
+
+  useProxyEl.checked = sGet(localStorage, "aat_useproxy") === "1";
+  proxyUrlEl.value = sGet(localStorage, "aat_proxy");
+  function syncProxyUi() { proxyWrap.hidden = !useProxyEl.checked; }
+  syncProxyUi();
+  useProxyEl.addEventListener("change", function () {
+    sSet(localStorage, "aat_useproxy", useProxyEl.checked ? "1" : "0");
+    syncProxyUi();
+  });
+  proxyUrlEl.addEventListener("input", function () { sSet(localStorage, "aat_proxy", proxyUrlEl.value.trim()); });
   apiKeyEl.addEventListener("input", function () {
     sSet(sessionStorage, "aat_key", apiKeyEl.value.trim());
     updateStatus();
@@ -306,7 +325,19 @@
     if (u.username || u.password) return { error: "Do not put user names or keys inside the URL." };
     if (!key) return { error: "Enter your API key." };
     if (/[^\x21-\x7E]/.test(key)) return { error: "API key has spaces or hidden characters. Paste it again." };
-    return { base: base, key: key, model: model };
+    var proxy = "";
+    if (useProxyEl.checked) {
+      proxy = proxyUrlEl.value.trim().replace(/\/+$/, "");
+      if (!proxy) return { error: "Enter the Proxy URL, or turn off Use proxy." };
+      var pu;
+      try { pu = new URL(proxy); } catch (e) { return { error: "Proxy URL is not valid. Example: https://your-proxy.onrender.com" }; }
+      var plocal = pu.hostname === "localhost" || pu.hostname === "127.0.0.1";
+      if (pu.protocol !== "https:" && !(plocal && pu.protocol === "http:")) {
+        return { error: "Proxy URL must start with https://" };
+      }
+      if (pu.username || pu.password) return { error: "Do not put user names or keys inside the Proxy URL." };
+    }
+    return { base: base, key: key, model: model, proxy: proxy };
   }
 
   function explain(status, bodyText) {
@@ -334,8 +365,25 @@
     return detail ? base + " Provider says: " + String(detail).slice(0, 300) : base;
   }
 
-  function networkMessage(e) {
+  function makeRequest(cfg, path, method, body, signal) {
+    var target = cfg.base + path;
+    var headers = { "Authorization": "Bearer " + cfg.key };
+    if (body) headers["Content-Type"] = "application/json";
+    var url = target;
+    if (cfg.proxy) { url = cfg.proxy + "/forward"; headers["X-Target-URL"] = target; }
+    return fetch(url, {
+      method: method,
+      headers: headers,
+      body: body || undefined,
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: signal
+    });
+  }
+
+  function networkMessage(e, cfg) {
     if (e && e.name === "AbortError") return "Stopped.";
+    if (cfg && cfg.proxy) return "Could not reach your proxy. If it was asleep, wait one minute and try again. Also check the Proxy URL.";
     return "Could not reach the provider. Check the Base URL and your internet. If it keeps failing, this provider may block browser requests (CORS).";
   }
 
@@ -346,15 +394,9 @@
     testBtn.disabled = true;
     setResult("Testing...", "");
     var ctl = new AbortController();
-    var t = setTimeout(function () { ctl.abort(); }, 20000);
+    var t = setTimeout(function () { ctl.abort(); }, cfg.proxy ? 90000 : 20000);
     try {
-      var res = await fetch(cfg.base + "/models", {
-        method: "GET",
-        headers: { "Authorization": "Bearer " + cfg.key },
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        signal: ctl.signal
-      });
+      var res = await makeRequest(cfg, "/models", "GET", null, ctl.signal);
       var text = await res.text();
       if (res.ok) {
         var count = "";
@@ -369,7 +411,7 @@
         updateStatus("bad", "Key failed");
       }
     } catch (e) {
-      setResult(e.name === "AbortError" ? "Timed out after 20 seconds." : networkMessage(e), "err");
+      setResult(e.name === "AbortError" ? "Timed out. If you use a proxy, it may be waking up, so try again." : networkMessage(e, cfg), "err");
       updateStatus("bad", "Not reached");
     } finally {
       clearTimeout(t);
@@ -421,7 +463,7 @@
     var pending = false;
     controller = new AbortController();
     var ctl = controller;
-    var firstByteTimer = setTimeout(function () { ctl.abort(); botEl.dataset.timeout = "1"; }, FIRST_BYTE_MS);
+    var firstByteTimer = setTimeout(function () { ctl.abort(); botEl.dataset.timeout = "1"; }, cfg.proxy ? PROXY_FIRST_BYTE_MS : FIRST_BYTE_MS);
 
     function paint() {
       pending = false;
@@ -434,21 +476,11 @@
     }
 
     try {
-      var res = await fetch(cfg.base + "/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + cfg.key,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: cfg.model,
-          messages: history.slice(-MAX_HISTORY),
-          stream: true
-        }),
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        signal: ctl.signal
-      });
+      var res = await makeRequest(cfg, "/chat/completions", "POST", JSON.stringify({
+        model: cfg.model,
+        messages: history.slice(-MAX_HISTORY),
+        stream: true
+      }), ctl.signal);
       clearTimeout(firstByteTimer);
 
       if (!res.ok) {
@@ -508,7 +540,7 @@
       } else if (e && e.name === "AbortError") {
         if (botEl.dataset.timeout) {
           botEl.className = "msg err";
-          botEl.textContent = "No reply after 60 seconds. Check the Base URL and model, then try again.";
+          botEl.textContent = "No reply in time. Check the Base URL, model and proxy, then try again.";
           history.pop();
         } else if (full) {
           botEl.textContent = full + "\n\n[stopped]";
@@ -520,7 +552,7 @@
         }
       } else {
         botEl.className = "msg err";
-        botEl.textContent = networkMessage(e);
+        botEl.textContent = networkMessage(e, cfg);
         history.pop();
         updateStatus("bad", "Not reached");
       }
